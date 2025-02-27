@@ -1,10 +1,11 @@
 import os
-from typing import List
+from dataclasses import dataclass
+from typing import Optional
 
 from browserbase import Browserbase
 from dotenv import load_dotenv
-from pydantic import BaseModel
-from pydantic_ai import AIModel
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent, RunContext
 from playwright.sync_api import sync_playwright
 
 load_dotenv()
@@ -16,24 +17,72 @@ BROWSERBASE_PROJECT_ID = os.environ["BROWSERBASE_PROJECT_ID"]
 
 bb = Browserbase(api_key=BROWSERBASE_API_KEY)
 
-@AIModel
-class ProductAnalysis(BaseModel):
-    is_portable: bool
-    is_rechargeable: bool
-    reasoning: str
+@dataclass
+class ProductInfo:
+    """Information about an Amazon product."""
+    title: str
+    description: str
+    asin: str
+    url: str
 
-def analyze_product(page) -> ProductAnalysis:
-    # Get product title and description
+class ProductAnalysis(BaseModel):
+    """Analysis of a water flosser product based on its information."""
+    is_portable: bool = Field(description="Whether the product is portable (compact and easy to carry)")
+    is_rechargeable: bool = Field(description="Whether the product is rechargeable (has a built-in battery that can be recharged)")
+    reasoning: str = Field(description="Explanation for the determinations made")
+
+# Create the agent that will analyze products
+product_analyzer = Agent(
+    "openai:gpt-4o",
+    result_type=ProductAnalysis,
+    system_prompt=(
+        "You are a product analysis expert specializing in water flossers. "
+        "Analyze the given product information to determine if it's portable and rechargeable. "
+        "A portable product is compact and easy to carry. "
+        "A rechargeable product has a built-in battery that can be recharged."
+    )
+)
+
+@dataclass
+class ScraperDependencies:
+    """Dependencies for the Amazon scraper."""
+    page: Optional[object] = None
+
+def extract_product_info(page, product_asin: str) -> ProductInfo:
+    """Extract product information from Amazon."""
+    url = f"https://amazon.com/dp/{product_asin}"
+    page.goto(url)
+    page.wait_for_timeout(1000)
+    
     title = page.locator('#productTitle').inner_text()
     description = page.locator('#feature-bullets').inner_text()
-    product_info = f"Product Title: {title}\nProduct Description: {description}"
     
-    return ProductAnalysis.from_prompt(
-        f"""Analyze this product information and determine if the product is portable and rechargeable:
-        {product_info}
-        
-        Respond only about portability and rechargeability based on the provided information."""
+    return ProductInfo(
+        title=title,
+        description=description,
+        asin=product_asin,
+        url=url
     )
+
+@product_analyzer.tool
+def get_product_details(ctx: RunContext[ScraperDependencies], product_info: ProductInfo) -> str:
+    """
+    Get detailed information about the product to aid in analysis.
+    
+    Args:
+        product_info: Information about the product being analyzed
+    
+    Returns:
+        A detailed description of the product
+    """
+    return f"""
+    Product Title: {product_info.title}
+    
+    Product Description:
+    {product_info.description}
+    
+    Product URL: {product_info.url}
+    """
 
 def get_product_asins(page, query):
     page.goto("https://amazon.com")
@@ -51,6 +100,32 @@ def get_product_asins(page, query):
 
     return product_asins
 
+def analyze_single_product(page, product_asin):
+    """Analyze a single product from Amazon."""
+    print(f"\nAnalyzing: https://amazon.com/dp/{product_asin}")
+    
+    # Extract product information
+    product_info = extract_product_info(page, product_asin)
+    
+    # Set up dependencies
+    deps = ScraperDependencies(page=page)
+    
+    try:
+        # Run the agent to analyze the product
+        result = product_analyzer.run_sync(
+            f"Please analyze this water flosser product with ASIN {product_asin}",
+            deps=deps
+        )
+        
+        # Display results
+        print(f"Portable: {result.data.is_portable}")
+        print(f"Rechargeable: {result.data.is_rechargeable}")
+        print(f"Reasoning: {result.data.reasoning}")
+        return result.data
+    except Exception as e:
+        print(f"Error analyzing product: {e}")
+        return None
+
 def main():
     session = bb.sessions.create(project_id=BROWSERBASE_PROJECT_ID)
     print("Session replay URL:", f"https://browserbase.com/sessions/{session.id}")
@@ -60,19 +135,13 @@ def main():
         context = browser.contexts[0]
         page = context.pages[0]
 
-        product_asins = get_product_asins(page, AMAZON_SEARCH_QUERY)
+        # For testing we'll use a fixed ASIN
+        # product_asins = get_product_asins(page, AMAZON_SEARCH_QUERY)
+        product_asins = ["B0BG52SJ5N"]  # For testing
+        
+        # Analyze first 3 products
         for product_asin in product_asins[:3]:
-            print(f"\nAnalyzing: https://amazon.com/dp/{product_asin}")
-            page.goto(f"https://amazon.com/dp/{product_asin}")
-            page.wait_for_timeout(1000)
-            
-            try:
-                analysis = analyze_product(page)
-                print(f"Portable: {analysis.is_portable}")
-                print(f"Rechargeable: {analysis.is_rechargeable}")
-                print(f"Reasoning: {analysis.reasoning}")
-            except Exception as e:
-                print(f"Error analyzing product: {e}")
+            analyze_single_product(page, product_asin)
 
         page.close()
         browser.close()
