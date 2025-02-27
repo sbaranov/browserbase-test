@@ -1,12 +1,13 @@
 import os
+import json
+from typing import Dict, List
 from dataclasses import dataclass
-from typing import Optional
 
 from browserbase import Browserbase
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, RunContext
 from playwright.sync_api import sync_playwright
+import openai  # Direct OpenAI client
 
 load_dotenv()
 
@@ -14,16 +15,10 @@ AMAZON_SEARCH_QUERY = "water flosser"
 
 BROWSERBASE_API_KEY = os.environ["BROWSERBASE_API_KEY"]
 BROWSERBASE_PROJECT_ID = os.environ["BROWSERBASE_PROJECT_ID"]
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 bb = Browserbase(api_key=BROWSERBASE_API_KEY)
-
-@dataclass
-class ProductInfo:
-    """Information about an Amazon product."""
-    title: str
-    description: str
-    asin: str
-    url: str
+openai.api_key = OPENAI_API_KEY
 
 class ProductAnalysis(BaseModel):
     """Analysis of a water flosser product based on its information."""
@@ -31,26 +26,7 @@ class ProductAnalysis(BaseModel):
     is_rechargeable: bool = Field(description="Whether the product is rechargeable (has a built-in battery that can be recharged)")
     reasoning: str = Field(description="Explanation for the determinations made")
 
-@dataclass
-class ScraperDependencies:
-    """Dependencies for the Amazon scraper."""
-    page: Optional[object] = None
-    product_info: Optional[ProductInfo] = None
-
-# Create the agent that will analyze products
-product_analyzer = Agent(
-    "openai:gpt-4o",
-    result_type=ProductAnalysis,
-    deps_type=ScraperDependencies,
-    system_prompt=(
-        "You are a product analysis expert specializing in water flossers. "
-        "Analyze the given product information to determine if it's portable and rechargeable. "
-        "A portable product is compact and easy to carry. "
-        "A rechargeable product has a built-in battery that can be recharged."
-    )
-)
-
-def extract_product_info(page, asin: str) -> ProductInfo:
+def extract_product_info(page, asin: str) -> Dict[str, str]:
     """Extract product information from Amazon."""
     url = f"https://amazon.com/dp/{asin}"
     page.goto(url)
@@ -59,35 +35,75 @@ def extract_product_info(page, asin: str) -> ProductInfo:
     title = page.locator('#productTitle').inner_text()
     description = page.locator('#feature-bullets').inner_text()
     
-    return ProductInfo(
-        title=title,
-        description=description,
-        asin=asin,
-        url=url
-    )
+    return {
+        "title": title,
+        "description": description,
+        "asin": asin,
+        "url": url
+    }
 
-@product_analyzer.tool
-def get_product_details(ctx: RunContext[ScraperDependencies]) -> str:
-    """
-    Get detailed information about the product to aid in analysis.
-    
-    Returns:
-        A detailed description of the product
-    """
-    product_info = ctx.deps.product_info
-    if not product_info:
-        return "No product information available"
-    
-    return f"""
-    Product Title: {product_info.title}
+def analyze_product_with_openai(product_info: Dict[str, str]) -> ProductAnalysis:
+    """Use OpenAI directly to analyze if a product is portable and rechargeable."""
+    # Format the product info as a string for the prompt
+    product_info_text = f"""
+    Product Title: {product_info['title']}
     
     Product Description:
-    {product_info.description}
+    {product_info['description']}
     
-    Product URL: {product_info.url}
+    Product URL: {product_info['url']}
     """
+    
+    # Create the analysis prompt
+    system_prompt = """
+    You are a product analysis expert specializing in water flossers.
+    Analyze the given product information to determine if it's portable and rechargeable.
+    
+    A portable product is compact and easy to carry.
+    A rechargeable product has a built-in battery that can be recharged.
+    
+    Return your analysis in JSON format with these fields:
+    - is_portable (boolean): Whether the product is portable
+    - is_rechargeable (boolean): Whether the product is rechargeable
+    - reasoning (string): Your explanation for these determinations
+    """
+    
+    user_prompt = f"""
+    Here's the product information:
+    {product_info_text}
+    
+    Analyze if this product is portable and rechargeable based on the information provided.
+    """
+    
+    # Use the OpenAI client to get the result
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
+        
+        # Parse the JSON response
+        result = json.loads(response.choices[0].message.content)
+        return ProductAnalysis(
+            is_portable=result["is_portable"],
+            is_rechargeable=result["is_rechargeable"],
+            reasoning=result["reasoning"]
+        )
+    except Exception as e:
+        print(f"Error analyzing product: {e}")
+        # Return a default analysis in case of error
+        return ProductAnalysis(
+            is_portable=False,
+            is_rechargeable=False,
+            reasoning=f"Error analyzing product: {str(e)}"
+        )
 
-def search_products(page, query):
+def search_products(page, query) -> List[str]:
+    """Search Amazon for products and extract their ASINs."""
     page.goto("https://amazon.com")
     page.get_by_placeholder("Search Amazon").fill(query)
     page.locator('#nav-search-submit-button').click()
@@ -103,34 +119,6 @@ def search_products(page, query):
 
     return asins
 
-def analyze_product(page, asin):
-    print(f"\nAnalyzing: https://amazon.com/dp/{asin}")
-    
-    # Extract product information
-    product_info = extract_product_info(page, asin)
-    
-    # Set up dependencies including product_info
-    deps = ScraperDependencies(page=page, product_info=product_info)
-    
-    try:
-        # Run the agent to analyze the product
-        result = product_analyzer.run_sync(
-            f"""Please analyze this water flosser product:
-            
-            Use the get_product_details tool to get the product details and determine if it's portable and rechargeable.
-            """,
-            deps=deps
-        )
-        
-        # Display results
-        print(f"Portable: {result.data.is_portable}")
-        print(f"Rechargeable: {result.data.is_rechargeable}")
-        print(f"Reasoning: {result.data.reasoning}")
-        return result.data
-    except Exception as e:
-        print(f"Error analyzing product: {e}")
-        return None
-
 def main():
     session = bb.sessions.create(project_id=BROWSERBASE_PROJECT_ID)
     print("Session replay URL:", f"https://browserbase.com/sessions/{session.id}")
@@ -140,12 +128,25 @@ def main():
         context = browser.contexts[0]
         page = context.pages[0]
 
+        # For testing, use a specific ASIN
+        asins = ["B0BG52SJ5N"]  # For testing only
+        # Uncomment to search for real products
         # asins = search_products(page, AMAZON_SEARCH_QUERY)
-        asins = ["B0BG52SJ5N"]  # For testing
         
         # Analyze first 3 products
         for asin in asins[:3]:
-            analyze_product(page, asin)
+            print(f"\nAnalyzing: https://amazon.com/dp/{asin}")
+            
+            # Get product information
+            product_info = extract_product_info(page, asin)
+            
+            # Analyze the product
+            analysis = analyze_product_with_openai(product_info)
+            
+            # Display results
+            print(f"Portable: {analysis.is_portable}")
+            print(f"Rechargeable: {analysis.is_rechargeable}")
+            print(f"Reasoning: {analysis.reasoning}")
 
         page.close()
         browser.close()
