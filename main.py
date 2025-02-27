@@ -25,6 +25,7 @@ class ProductAnalysis(BaseModel):
     is_portable: bool = Field(description="Whether the product is portable (compact and easy to carry)")
     is_rechargeable: bool = Field(description="Whether the product is rechargeable (has a built-in battery that can be recharged)")
     value_score: float = Field(description="Score from 1-10 indicating the overall value of the product")
+    brand_reputation: int = Field(description="Score from 1-5 indicating the brand's reputation in the market")
     reasoning: str = Field(description="Explanation for the determinations made")
 
 def extract_product_info(page, asin: str) -> Dict[str, str]:
@@ -45,10 +46,48 @@ def extract_product_info(page, asin: str) -> Dict[str, str]:
     except:
         pass
     
+    # Try to extract brand information if available
+    brand = ""
+    try:
+        # Try method 1: Check for brand element
+        brand_element = page.locator('a#bylineInfo').first
+        if brand_element:
+            brand = brand_element.inner_text().replace("Brand: ", "").strip()
+        
+        # If not found, try method 2: Extract from title
+        if not brand and title:
+            # Extract first word as potential brand
+            brand = title.split()[0]
+    except:
+        # If all methods fail, extract first word from title as fallback
+        if title:
+            brand = title.split()[0]
+    
+    # Try to extract ratings information
+    ratings = ""
+    try:
+        ratings_element = page.locator('#acrPopover').first
+        if ratings_element:
+            ratings = ratings_element.get_attribute('title')
+    except:
+        pass
+    
+    # Try to extract number of reviews
+    reviews = ""
+    try:
+        reviews_element = page.locator('#acrCustomerReviewText').first
+        if reviews_element:
+            reviews = reviews_element.inner_text()
+    except:
+        pass
+    
     return {
         "title": title,
         "description": description,
         "price": price,
+        "brand": brand,
+        "ratings": ratings,
+        "reviews": reviews,
         "asin": asin,
         "url": url
     }
@@ -62,7 +101,13 @@ def analyze_product_with_openai(product_info: Dict[str, str]) -> ProductAnalysis
     Product Description:
     {product_info['description']}
     
+    Brand: {product_info.get('brand', 'Not specified')}
+    
     Price: {product_info.get('price', 'Not available')}
+    
+    Ratings: {product_info.get('ratings', 'Not available')}
+    
+    Reviews: {product_info.get('reviews', 'Not available')}
     
     Product URL: {product_info['url']}
     """
@@ -81,21 +126,33 @@ def analyze_product_with_openai(product_info: Dict[str, str]) -> ProductAnalysis
        - Water tank capacity and pressure settings
        - Durability based on materials mentioned
        - Overall usefulness for oral hygiene
+       - Brand reputation (as assessed in point 4)
+       - Price competitiveness for features offered
        
-    A score of 10 means exceptional value, while 1 means poor value.
+    4. A brand reputation score from 1-5 where:
+       - 5: Industry leader, well-established with excellent reputation
+       - 4: Well-known brand with good reputation
+       - 3: Average brand recognition and reputation
+       - 2: Lesser-known brand with limited reputation
+       - 1: Unknown brand or known for poor quality
+       
+    Consider the brand name, ratings, number of reviews, and any mentions of brand reputation in reviews.
+       
+    A value score of 10 means exceptional value, while 1 means poor value.
     
     Return your analysis in JSON format with these fields:
     - is_portable (boolean): Whether the product is portable
     - is_rechargeable (boolean): Whether the product is rechargeable
     - value_score (number): Score from 1-10 indicating the overall value
-    - reasoning (string): Your explanation for all determinations
+    - brand_reputation (number): Score from 1-5 for the brand's reputation
+    - reasoning (string): Your explanation for all determinations, including separate sections for portability, rechargeability, value assessment, and brand reputation
     """
     
     user_prompt = f"""
     Here's the product information:
     {product_info_text}
     
-    Analyze if this product is portable, rechargeable, and provide a value score based on the information provided.
+    Analyze if this product is portable, rechargeable, provide a value score, and assess the brand reputation based on the information provided.
     """
     
     # Use the OpenAI client to get the result
@@ -115,6 +172,7 @@ def analyze_product_with_openai(product_info: Dict[str, str]) -> ProductAnalysis
             is_portable=result["is_portable"],
             is_rechargeable=result["is_rechargeable"],
             value_score=float(result["value_score"]),
+            brand_reputation=int(result["brand_reputation"]),
             reasoning=result["reasoning"]
         )
     except Exception as e:
@@ -124,6 +182,7 @@ def analyze_product_with_openai(product_info: Dict[str, str]) -> ProductAnalysis
             is_portable=False,
             is_rechargeable=False,
             value_score=0.0,
+            brand_reputation=1,
             reasoning=f"Error analyzing product: {str(e)}"
         )
 
@@ -169,6 +228,7 @@ def main():
             # Display results
             print(f"Portable: {analysis.is_portable}")
             print(f"Rechargeable: {analysis.is_rechargeable}")
+            print(f"Brand Reputation: {analysis.brand_reputation}/5")
             print(f"Value Score: {analysis.value_score}/10")
             print(f"Reasoning: {analysis.reasoning}")
 
