@@ -188,6 +188,8 @@ def analyze_product_with_openai(product_info: Dict[str, str]) -> ProductAnalysis
 
 def search_products(page, query) -> List[str]:
     """Search Amazon for products and extract their ASINs."""
+    print(f"Searching Amazon for {AMAZON_SEARCH_QUERY}...")
+
     page.goto("https://amazon.com")
     page.get_by_placeholder("Search Amazon").fill(query)
     page.locator('#nav-search-submit-button').click()
@@ -201,6 +203,7 @@ def search_products(page, query) -> List[str]:
 
         asins.append(data_asin)
 
+    print(f"Found {len(asins)} products")
     return asins
 
 def main():
@@ -213,7 +216,7 @@ def main():
         page = context.pages[0]
 
         asins = search_products(page, AMAZON_SEARCH_QUERY)
-        # asins = ["B0BG52SJ5N"]  # For testing only
+        asins = ["B0BG52SJ5N"]  # For testing only
         
         # Analyze first 3 products
         for asin in asins[:3]:
@@ -226,11 +229,12 @@ def main():
             analysis = analyze_product_with_openai(product_info)
             
             # Display results
+            print(f"Product: {product_info['title']}")
             print(f"Portable: {analysis.is_portable}")
             print(f"Rechargeable: {analysis.is_rechargeable}")
             print(f"Brand Reputation: {analysis.brand_reputation}/5")
             print(f"Value Score: {analysis.value_score}/10")
-            print(f"Reasoning: {analysis.reasoning}")
+            print(f"Reasoning:\n{analysis.reasoning}")
 
         page.close()
         browser.close()
