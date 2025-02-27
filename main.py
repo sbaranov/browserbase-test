@@ -31,10 +31,17 @@ class ProductAnalysis(BaseModel):
     is_rechargeable: bool = Field(description="Whether the product is rechargeable (has a built-in battery that can be recharged)")
     reasoning: str = Field(description="Explanation for the determinations made")
 
+@dataclass
+class ScraperDependencies:
+    """Dependencies for the Amazon scraper."""
+    page: Optional[object] = None
+    product_info: Optional[ProductInfo] = None
+
 # Create the agent that will analyze products
 product_analyzer = Agent(
     "openai:gpt-4o",
     result_type=ProductAnalysis,
+    deps_type=ScraperDependencies,
     system_prompt=(
         "You are a product analysis expert specializing in water flossers. "
         "Analyze the given product information to determine if it's portable and rechargeable. "
@@ -42,11 +49,6 @@ product_analyzer = Agent(
         "A rechargeable product has a built-in battery that can be recharged."
     )
 )
-
-@dataclass
-class ScraperDependencies:
-    """Dependencies for the Amazon scraper."""
-    page: Optional[object] = None
 
 def extract_product_info(page, asin: str) -> ProductInfo:
     """Extract product information from Amazon."""
@@ -65,16 +67,17 @@ def extract_product_info(page, asin: str) -> ProductInfo:
     )
 
 @product_analyzer.tool
-def get_product_details(ctx: RunContext[ScraperDependencies], product_info: ProductInfo) -> str:
+def get_product_details(ctx: RunContext[ScraperDependencies]) -> str:
     """
     Get detailed information about the product to aid in analysis.
-    
-    Args:
-        product_info: Information about the product being analyzed
     
     Returns:
         A detailed description of the product
     """
+    product_info = ctx.deps.product_info
+    if not product_info:
+        return "No product information available"
+    
     return f"""
     Product Title: {product_info.title}
     
@@ -106,13 +109,16 @@ def analyze_product(page, asin):
     # Extract product information
     product_info = extract_product_info(page, asin)
     
-    # Set up dependencies
-    deps = ScraperDependencies(page=page)
+    # Set up dependencies including product_info
+    deps = ScraperDependencies(page=page, product_info=product_info)
     
     try:
         # Run the agent to analyze the product
         result = product_analyzer.run_sync(
-            f"Please analyze this water flosser product with ASIN {asin}",
+            f"""Please analyze this water flosser product:
+            
+            Use the get_product_details tool to get the product details and determine if it's portable and rechargeable.
+            """,
             deps=deps
         )
         
