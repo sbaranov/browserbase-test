@@ -6,6 +6,8 @@ from playwright.sync_api import sync_playwright
 
 load_dotenv()
 
+AMAZON_SEARCH_QUERY = "water flosser"
+
 BROWSERBASE_API_KEY = os.environ["BROWSERBASE_API_KEY"]
 BROWSERBASE_PROJECT_ID = os.environ["BROWSERBASE_PROJECT_ID"]
 
@@ -20,8 +22,9 @@ def main():
         context = browser.contexts[0]
         page = context.pages[0]
 
-        page.goto("https://example.com")
-        # page.get_by_role("button", name="Submit").click()
+        page.goto("https://amazon.com")
+        page.get_by_placeholder("Search Amazon").fill(AMAZON_SEARCH_QUERY)
+        page.locator('#nav-search-submit-button').click()
         page.screenshot(path="screenshot.png")
 
         page.close()
