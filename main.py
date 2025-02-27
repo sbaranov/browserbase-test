@@ -24,6 +24,7 @@ class ProductAnalysis(BaseModel):
     """Analysis of a water flosser product based on its information."""
     is_portable: bool = Field(description="Whether the product is portable (compact and easy to carry)")
     is_rechargeable: bool = Field(description="Whether the product is rechargeable (has a built-in battery that can be recharged)")
+    value_score: float = Field(description="Score from 1-10 indicating the overall value of the product")
     reasoning: str = Field(description="Explanation for the determinations made")
 
 def extract_product_info(page, asin: str) -> Dict[str, str]:
@@ -35,9 +36,19 @@ def extract_product_info(page, asin: str) -> Dict[str, str]:
     title = page.locator('#productTitle').inner_text()
     description = page.locator('#feature-bullets').inner_text()
     
+    # Try to extract price information if available
+    price = ""
+    try:
+        price_element = page.locator('.a-price .a-offscreen').first
+        if price_element:
+            price = price_element.inner_text()
+    except:
+        pass
+    
     return {
         "title": title,
         "description": description,
+        "price": price,
         "asin": asin,
         "url": url
     }
@@ -51,28 +62,40 @@ def analyze_product_with_openai(product_info: Dict[str, str]) -> ProductAnalysis
     Product Description:
     {product_info['description']}
     
+    Price: {product_info.get('price', 'Not available')}
+    
     Product URL: {product_info['url']}
     """
     
     # Create the analysis prompt
     system_prompt = """
     You are a product analysis expert specializing in water flossers.
-    Analyze the given product information to determine if it's portable and rechargeable.
+    Analyze the given product information to determine:
     
-    A portable product is compact and easy to carry.
-    A rechargeable product has a built-in battery that can be recharged.
+    1. If it's portable (compact and easy to carry)
+    2. If it's rechargeable (has a built-in battery that can be recharged)
+    3. A value score from 1-10 based on the following criteria:
+       - Features relative to typical market offerings
+       - Portability benefits (if applicable)
+       - Battery life and charging features (if applicable)
+       - Water tank capacity and pressure settings
+       - Durability based on materials mentioned
+       - Overall usefulness for oral hygiene
+       
+    A score of 10 means exceptional value, while 1 means poor value.
     
     Return your analysis in JSON format with these fields:
     - is_portable (boolean): Whether the product is portable
     - is_rechargeable (boolean): Whether the product is rechargeable
-    - reasoning (string): Your explanation for these determinations
+    - value_score (number): Score from 1-10 indicating the overall value
+    - reasoning (string): Your explanation for all determinations
     """
     
     user_prompt = f"""
     Here's the product information:
     {product_info_text}
     
-    Analyze if this product is portable and rechargeable based on the information provided.
+    Analyze if this product is portable, rechargeable, and provide a value score based on the information provided.
     """
     
     # Use the OpenAI client to get the result
@@ -91,6 +114,7 @@ def analyze_product_with_openai(product_info: Dict[str, str]) -> ProductAnalysis
         return ProductAnalysis(
             is_portable=result["is_portable"],
             is_rechargeable=result["is_rechargeable"],
+            value_score=float(result["value_score"]),
             reasoning=result["reasoning"]
         )
     except Exception as e:
@@ -99,6 +123,7 @@ def analyze_product_with_openai(product_info: Dict[str, str]) -> ProductAnalysis
         return ProductAnalysis(
             is_portable=False,
             is_rechargeable=False,
+            value_score=0.0,
             reasoning=f"Error analyzing product: {str(e)}"
         )
 
@@ -128,10 +153,8 @@ def main():
         context = browser.contexts[0]
         page = context.pages[0]
 
-        # For testing, use a specific ASIN
-        asins = ["B0BG52SJ5N"]  # For testing only
-        # Uncomment to search for real products
-        # asins = search_products(page, AMAZON_SEARCH_QUERY)
+        asins = search_products(page, AMAZON_SEARCH_QUERY)
+        # asins = ["B0BG52SJ5N"]  # For testing only
         
         # Analyze first 3 products
         for asin in asins[:3]:
@@ -146,6 +169,7 @@ def main():
             # Display results
             print(f"Portable: {analysis.is_portable}")
             print(f"Rechargeable: {analysis.is_rechargeable}")
+            print(f"Value Score: {analysis.value_score}/10")
             print(f"Reasoning: {analysis.reasoning}")
 
         page.close()
