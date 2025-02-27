@@ -48,9 +48,9 @@ class ScraperDependencies:
     """Dependencies for the Amazon scraper."""
     page: Optional[object] = None
 
-def extract_product_info(page, product_asin: str) -> ProductInfo:
+def extract_product_info(page, asin: str) -> ProductInfo:
     """Extract product information from Amazon."""
-    url = f"https://amazon.com/dp/{product_asin}"
+    url = f"https://amazon.com/dp/{asin}"
     page.goto(url)
     page.wait_for_timeout(1000)
     
@@ -60,7 +60,7 @@ def extract_product_info(page, product_asin: str) -> ProductInfo:
     return ProductInfo(
         title=title,
         description=description,
-        asin=product_asin,
+        asin=asin,
         url=url
     )
 
@@ -84,28 +84,27 @@ def get_product_details(ctx: RunContext[ScraperDependencies], product_info: Prod
     Product URL: {product_info.url}
     """
 
-def get_product_asins(page, query):
+def search_products(page, query):
     page.goto("https://amazon.com")
     page.get_by_placeholder("Search Amazon").fill(query)
     page.locator('#nav-search-submit-button').click()
     page.wait_for_timeout(1000)
 
-    product_asins = []
+    asins = []
     for result in page.locator('.s-result-item').all():
         data_asin = result.get_attribute('data-asin')
         if not data_asin:
             continue
 
-        product_asins.append(data_asin)
+        asins.append(data_asin)
 
-    return product_asins
+    return asins
 
-def analyze_single_product(page, product_asin):
-    """Analyze a single product from Amazon."""
-    print(f"\nAnalyzing: https://amazon.com/dp/{product_asin}")
+def analyze_product(page, asin):
+    print(f"\nAnalyzing: https://amazon.com/dp/{asin}")
     
     # Extract product information
-    product_info = extract_product_info(page, product_asin)
+    product_info = extract_product_info(page, asin)
     
     # Set up dependencies
     deps = ScraperDependencies(page=page)
@@ -113,7 +112,7 @@ def analyze_single_product(page, product_asin):
     try:
         # Run the agent to analyze the product
         result = product_analyzer.run_sync(
-            f"Please analyze this water flosser product with ASIN {product_asin}",
+            f"Please analyze this water flosser product with ASIN {asin}",
             deps=deps
         )
         
@@ -135,13 +134,12 @@ def main():
         context = browser.contexts[0]
         page = context.pages[0]
 
-        # For testing we'll use a fixed ASIN
-        # product_asins = get_product_asins(page, AMAZON_SEARCH_QUERY)
-        product_asins = ["B0BG52SJ5N"]  # For testing
+        # asins = search_products(page, AMAZON_SEARCH_QUERY)
+        asins = ["B0BG52SJ5N"]  # For testing
         
         # Analyze first 3 products
-        for product_asin in product_asins[:3]:
-            analyze_single_product(page, product_asin)
+        for asin in asins[:3]:
+            analyze_product(page, asin)
 
         page.close()
         browser.close()
